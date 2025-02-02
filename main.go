@@ -83,7 +83,15 @@ func main() {
 			bucket = getBucketInput(currPlayer)
 		}
 
-		playAgain, err := board.move(currPlayer, bucket, nil)
+		// Print move information
+		playerName := "Player A"
+		if currPlayer == PlayerB {
+			playerName = "Player B"
+		}
+		stones := board[currPlayer].getBucket(bucket)
+		fmt.Printf("\n%s picks up %d stones from bucket %d\n", playerName, stones, bucket+1)
+
+		playAgain, err := board.move(currPlayer, bucket)
 		if err != nil {
 			fmt.Printf("Invalid move: %v\n", err)
 			continue
@@ -134,40 +142,43 @@ func getBucketInput(player Player) int {
 	}
 }
 
-func (b Board) move(player Player, bucket int, opts *MoveOptions) (bool, error) {
+func (b Board) move(player Player, bucket int) (bool, error) {
 	if bucket > 5 {
 		return false, fmt.Errorf("invalid bucket")
 	}
 
-	count := b[player].getBucket(bucket)
-	if count == 0 {
+	// Get stones using bit shift and mask
+	shift := bucket * 6
+	stones := (b[player].Buckets >> shift) & 0x3F
+	if stones == 0 {
 		return false, fmt.Errorf("bucket is empty")
 	}
 
-	if opts == nil || !opts.silent {
-		playerName := "Player A"
-		if player == PlayerB {
-			playerName = "Player B"
-		}
-		fmt.Printf("\n%s picks up %d stones from bucket %d\n", playerName, count, bucket+1)
-	}
-
-	b[player].setBucket(bucket, 0)
+	// Clear the source bucket
+	b[player].Buckets &= ^(uint64(0x3F) << shift)
 	actualPlayer := player
 
-	for count > 0 {
+	for stones > 0 {
 		bucket++
 		if bucket == 6 {
 			if actualPlayer == player {
 				b[player].Goal++
-				count--
+				stones--
 			}
 			player = !player
 			bucket = -1
 			continue
 		}
-		count--
-		b[player].setBucket(bucket, b[player].getBucket(bucket)+1)
+		stones--
+
+		// Add one stone to current bucket using bit operations
+		shift = bucket * 6
+		// Extract current value
+		currVal := (b[player].Buckets >> shift) & 0x3F
+		// Increment it
+		newVal := currVal + 1
+		// Clear old value and set new value
+		b[player].Buckets = (b[player].Buckets & ^(uint64(0x3F) << shift)) | (newVal << shift)
 	}
 
 	return bucket == -1, nil
@@ -267,13 +278,12 @@ func minMax(board Board, depth int, maximizing bool, player Player, alpha, beta 
 		return board.evaluate(player), -1
 	}
 
-	opts := &MoveOptions{silent: true}
 	var bestMove int
 	if maximizing {
 		maxEval := -1000000
 		for _, move := range validMoves {
 			record := board.recordMove(player)
-			playAgain, _ := board.move(player, move, opts)
+			playAgain, _ := board.move(player, move)
 			var eval int
 			if playAgain {
 				eval, _ = minMax(board, depth-1, true, player, alpha, beta)
@@ -296,7 +306,7 @@ func minMax(board Board, depth int, maximizing bool, player Player, alpha, beta 
 		minEval := 1000000
 		for _, move := range validMoves {
 			record := board.recordMove(player)
-			playAgain, _ := board.move(player, move, opts)
+			playAgain, _ := board.move(player, move)
 			var eval int
 			if playAgain {
 				eval, _ = minMax(board, depth-1, false, player, alpha, beta)
@@ -336,9 +346,4 @@ func min(a, b int) int {
 		return a
 	}
 	return b
-}
-
-// Add MoveOptions type for silent moves during AI evaluation
-type MoveOptions struct {
-	silent bool
 }
