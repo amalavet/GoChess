@@ -24,9 +24,10 @@ var StartBoard = Board{
 }
 
 const (
-	PlayerA  Player = true
-	PlayerB  Player = false
-	MaxDepth        = 14 // How deep the AI looks ahead
+	PlayerA        Player = true
+	PlayerB        Player = false
+	MaxDepth              = 16 // How deep the AI looks ahead
+	goalMultiplier        = 3
 
 	// Bit masks for each 6-stone bucket position (000000 through 111111)
 	BucketMask0 uint64 = 0b111111                               // First bucket:  000000-000101
@@ -46,8 +47,6 @@ func (s *Side) getBucket(i int) uint64 {
 func (b Board) display() {
 	scoreA, scoreB := b.scores()
 	fmt.Printf("\nScores - Player A: %d, Player B: %d\n\n", scoreA, scoreB)
-
-	// Player B's buckets (reversed)
 	fmt.Print("     ")
 	for i := 5; i >= 0; i-- {
 		fmt.Printf("[%d] ", b[PlayerB].getBucket(i))
@@ -74,14 +73,32 @@ func main() {
 	fmt.Scanln(&response)
 	playAgainstAI := response == "y" || response == "Y"
 
+	var playerIsA bool
+	if playAgainstAI {
+		fmt.Println("Do you want to go first? (y/n)")
+		fmt.Scanln(&response)
+		playerIsA = response == "y" || response == "Y"
+	}
+
 	board.display()
 	for !board.isEnd() {
 		var bucket int
-		if playAgainstAI && currPlayer == PlayerB {
-			bucket = getAIMove(board, PlayerB)
+		if playAgainstAI && ((playerIsA && currPlayer == PlayerB) || (!playerIsA && currPlayer == PlayerA)) {
+			bucket = getAIMove(board, currPlayer)
 			fmt.Printf("AI chooses bucket %d\n", bucket+1)
 		} else {
 			bucket = getBucketInput(currPlayer)
+		}
+
+		// Add validation checks
+		if bucket > 5 {
+			fmt.Println("Invalid move: bucket number too high")
+			continue
+		}
+		stones := board[currPlayer].getBucket(bucket)
+		if stones == 0 {
+			fmt.Println("Invalid move: bucket is empty")
+			continue
 		}
 
 		// Print move information
@@ -89,14 +106,9 @@ func main() {
 		if currPlayer == PlayerB {
 			playerName = "Player B"
 		}
-		stones := board[currPlayer].getBucket(bucket)
 		fmt.Printf("\n%s picks up %d stones from bucket %d\n", playerName, stones, bucket+1)
 
-		playAgain, err := board.move(currPlayer, bucket)
-		if err != nil {
-			fmt.Printf("Invalid move: %v\n", err)
-			continue
-		}
+		playAgain, _ := board.move(currPlayer, bucket)
 
 		// Always display the board after a move
 		board.display()
@@ -144,16 +156,9 @@ func getBucketInput(player Player) int {
 }
 
 func (b Board) move(player Player, bucket int) (bool, error) {
-	if bucket > 5 {
-		return false, fmt.Errorf("invalid bucket")
-	}
-
 	// Get stones using bit shift and mask
 	shift := bucket * 6
 	stones := (b[player].Buckets >> shift) & 0b111111 // Single 6-bit mask
-	if stones == 0 {
-		return false, fmt.Errorf("bucket is empty")
-	}
 
 	// Clear the source bucket
 	b[player].Buckets &= ^(uint64(0b111111) << shift)
@@ -180,27 +185,20 @@ func (b Board) move(player Player, bucket int) (bool, error) {
 }
 
 func (b Board) scores() (uint64, uint64) {
-	// Start with goals
-	scoreA := b[PlayerA].Goal * 3
-	scoreB := b[PlayerB].Goal * 3
-
-	// Sum buckets for Player A
-	bucketsA := (b[PlayerA].Buckets & BucketMask0) +
-		((b[PlayerA].Buckets & BucketMask1) >> 6) +
-		((b[PlayerA].Buckets & BucketMask2) >> 12) +
-		((b[PlayerA].Buckets & BucketMask3) >> 18) +
-		((b[PlayerA].Buckets & BucketMask4) >> 24) +
-		((b[PlayerA].Buckets & BucketMask5) >> 30)
-
-	// Sum buckets for Player B
-	bucketsB := (b[PlayerB].Buckets & BucketMask0) +
-		((b[PlayerB].Buckets & BucketMask1) >> 6) +
-		((b[PlayerB].Buckets & BucketMask2) >> 12) +
-		((b[PlayerB].Buckets & BucketMask3) >> 18) +
-		((b[PlayerB].Buckets & BucketMask4) >> 24) +
-		((b[PlayerB].Buckets & BucketMask5) >> 30)
-
-	return scoreA + bucketsA, scoreB + bucketsB
+	return b[PlayerA].Goal*goalMultiplier +
+			(b[PlayerA].Buckets & BucketMask0) +
+			((b[PlayerA].Buckets & BucketMask1) >> 6) +
+			((b[PlayerA].Buckets & BucketMask2) >> 12) +
+			((b[PlayerA].Buckets & BucketMask3) >> 18) +
+			((b[PlayerA].Buckets & BucketMask4) >> 24) +
+			((b[PlayerA].Buckets & BucketMask5) >> 30),
+		b[PlayerB].Goal*goalMultiplier +
+			(b[PlayerB].Buckets & BucketMask0) +
+			((b[PlayerB].Buckets & BucketMask1) >> 6) +
+			((b[PlayerB].Buckets & BucketMask2) >> 12) +
+			((b[PlayerB].Buckets & BucketMask3) >> 18) +
+			((b[PlayerB].Buckets & BucketMask4) >> 24) +
+			((b[PlayerB].Buckets & BucketMask5) >> 30)
 }
 
 func (b Board) isEnd() bool {
@@ -242,7 +240,6 @@ func (b Board) undoMove(record MoveRecord) {
 
 // Add these functions for the AI
 func (b Board) getValidMoves(player Player) []int {
-	moves := make([]int, 0, 6)
 	// Create a mask that has 1 in the lowest bit of each 6-bit group
 	const validBitMask uint64 = 0b000001_000001_000001_000001_000001_000001
 
@@ -254,12 +251,27 @@ func (b Board) getValidMoves(player Player) []int {
 		((b[player].Buckets >> 4) & validBitMask) |
 		((b[player].Buckets >> 5) & validBitMask)
 
-	// Check each position
-	for i := 0; i < 6; i++ {
-		if nonEmptyBuckets&(1<<(i*6)) != 0 {
-			moves = append(moves, i)
-		}
+	moves := make([]int, 0, 6)
+
+	if nonEmptyBuckets&1 != 0 {
+		moves = append(moves, 0)
 	}
+	if nonEmptyBuckets&(1<<6) != 0 {
+		moves = append(moves, 1)
+	}
+	if nonEmptyBuckets&(1<<12) != 0 {
+		moves = append(moves, 2)
+	}
+	if nonEmptyBuckets&(1<<18) != 0 {
+		moves = append(moves, 3)
+	}
+	if nonEmptyBuckets&(1<<24) != 0 {
+		moves = append(moves, 4)
+	}
+	if nonEmptyBuckets&(1<<30) != 0 {
+		moves = append(moves, 5)
+	}
+
 	return moves
 }
 
