@@ -27,19 +27,20 @@ const (
 	PlayerA  Player = true
 	PlayerB  Player = false
 	MaxDepth        = 14 // How deep the AI looks ahead
+
+	// Bit masks for each 6-stone bucket position (000000 through 111111)
+	BucketMask0 uint64 = 0b111111                               // First bucket:  000000-000101
+	BucketMask1 uint64 = 0b111111000000                         // Second bucket: 000006-000011
+	BucketMask2 uint64 = 0b111111000000000000                   // Third bucket:  000012-000017
+	BucketMask3 uint64 = 0b111111000000000000000000             // Fourth bucket: 000018-000023
+	BucketMask4 uint64 = 0b111111000000000000000000000000       // Fifth bucket:  000024-000029
+	BucketMask5 uint64 = 0b111111000000000000000000000000000000 // Sixth bucket:  000030-000035
 )
 
 // Helper functions to get/set bucket values
 func (s *Side) getBucket(i int) uint64 {
 	shift := i * 6
-	return (s.Buckets >> shift) & 0x3F // 0x3F = 111111 (6 bits)
-}
-
-func (s *Side) setBucket(i int, value uint64) {
-	shift := i * 6
-	// Clear the bucket's bits and set the new value
-	mask := uint64(0x3F) << uint(shift) // 0x3F = 111111 (6 bits)
-	s.Buckets = (s.Buckets & ^mask) | (uint64(value) << uint(shift))
+	return (s.Buckets >> shift) & 0b111111 // Single 6-bit mask
 }
 
 func (b Board) display() {
@@ -149,13 +150,13 @@ func (b Board) move(player Player, bucket int) (bool, error) {
 
 	// Get stones using bit shift and mask
 	shift := bucket * 6
-	stones := (b[player].Buckets >> shift) & 0x3F
+	stones := (b[player].Buckets >> shift) & 0b111111 // Single 6-bit mask
 	if stones == 0 {
 		return false, fmt.Errorf("bucket is empty")
 	}
 
 	// Clear the source bucket
-	b[player].Buckets &= ^(uint64(0x3F) << shift)
+	b[player].Buckets &= ^(uint64(0b111111) << shift)
 	actualPlayer := player
 
 	for stones > 0 {
@@ -171,14 +172,8 @@ func (b Board) move(player Player, bucket int) (bool, error) {
 		}
 		stones--
 
-		// Add one stone to current bucket using bit operations
-		shift = bucket * 6
-		// Extract current value
-		currVal := (b[player].Buckets >> shift) & 0x3F
-		// Increment it
-		newVal := currVal + 1
-		// Clear old value and set new value
-		b[player].Buckets = (b[player].Buckets & ^(uint64(0x3F) << shift)) | (newVal << shift)
+		// Increment bucket in one operation by adding 1 shifted to the bucket position
+		b[player].Buckets += 1 << (bucket * 6)
 	}
 
 	return bucket == -1, nil
@@ -186,34 +181,30 @@ func (b Board) move(player Player, bucket int) (bool, error) {
 
 func (b Board) scores() (uint64, uint64) {
 	// Start with goals
-	scoreA := b[PlayerA].Goal
-	scoreB := b[PlayerB].Goal
+	scoreA := b[PlayerA].Goal * 3
+	scoreB := b[PlayerB].Goal * 3
 
-	// Add all bucket values using bit manipulation
-	const mask uint64 = 0x3F // 111111 in binary
+	// Sum buckets for Player A
+	bucketsA := (b[PlayerA].Buckets & BucketMask0) +
+		((b[PlayerA].Buckets & BucketMask1) >> 6) +
+		((b[PlayerA].Buckets & BucketMask2) >> 12) +
+		((b[PlayerA].Buckets & BucketMask3) >> 18) +
+		((b[PlayerA].Buckets & BucketMask4) >> 24) +
+		((b[PlayerA].Buckets & BucketMask5) >> 30)
 
-	// For each player's buckets:
-	// 1. Extract each 6-bit group using shifts and masks
-	// 2. Add them to the total
-	for shift := 0; shift < 36; shift += 6 {
-		scoreA += (b[PlayerA].Buckets >> shift) & mask
-		scoreB += (b[PlayerB].Buckets >> shift) & mask
-	}
+	// Sum buckets for Player B
+	bucketsB := (b[PlayerB].Buckets & BucketMask0) +
+		((b[PlayerB].Buckets & BucketMask1) >> 6) +
+		((b[PlayerB].Buckets & BucketMask2) >> 12) +
+		((b[PlayerB].Buckets & BucketMask3) >> 18) +
+		((b[PlayerB].Buckets & BucketMask4) >> 24) +
+		((b[PlayerB].Buckets & BucketMask5) >> 30)
 
-	return scoreA, scoreB
+	return scoreA + bucketsA, scoreB + bucketsB
 }
 
 func (b Board) isEnd() bool {
 	return b[PlayerA].Buckets == 0 || b[PlayerB].Buckets == 0
-}
-
-// Add a helper function to count total stones in buckets
-func (s *Side) totalStones() uint64 {
-	var total uint64 = 0
-	for i := 0; i < 6; i++ {
-		total += s.getBucket(i)
-	}
-	return total
 }
 
 // Update MoveRecord to store delta operations
@@ -251,9 +242,21 @@ func (b Board) undoMove(record MoveRecord) {
 
 // Add these functions for the AI
 func (b Board) getValidMoves(player Player) []int {
-	moves := []int{}
+	moves := make([]int, 0, 6)
+	// Create a mask that has 1 in the lowest bit of each 6-bit group
+	const validBitMask uint64 = 0b000001_000001_000001_000001_000001_000001
+
+	// Get a value where each 1 bit represents a non-empty bucket
+	nonEmptyBuckets := (b[player].Buckets & validBitMask) |
+		((b[player].Buckets >> 1) & validBitMask) |
+		((b[player].Buckets >> 2) & validBitMask) |
+		((b[player].Buckets >> 3) & validBitMask) |
+		((b[player].Buckets >> 4) & validBitMask) |
+		((b[player].Buckets >> 5) & validBitMask)
+
+	// Check each position
 	for i := 0; i < 6; i++ {
-		if b[player].getBucket(i) > 0 {
+		if nonEmptyBuckets&(1<<(i*6)) != 0 {
 			moves = append(moves, i)
 		}
 	}
