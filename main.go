@@ -27,7 +27,7 @@ const (
 	PlayerA        Player = true
 	PlayerB        Player = false
 	MaxDepth              = 16 // How deep the AI looks ahead
-	goalMultiplier        = 3
+	goalMultiplier        = 100
 
 	// Bit masks for each 6-stone bucket position (000000 through 111111)
 	BucketMask0 uint64 = 0b111111                               // First bucket:  000000-000101
@@ -83,7 +83,8 @@ func main() {
 	board.display()
 	for !board.isEnd() {
 		var bucket int
-		if playAgainstAI && ((playerIsA && currPlayer == PlayerB) || (!playerIsA && currPlayer == PlayerA)) {
+		if playAgainstAI &&
+			((playerIsA && currPlayer == PlayerB) || (!playerIsA && currPlayer == PlayerA)) {
 			bucket = getAIMove(board, currPlayer)
 			fmt.Printf("AI chooses bucket %d\n", bucket+1)
 		} else {
